@@ -1,3 +1,17 @@
+const fetch = require("node-fetch");
+
+const getIngredients = async url => {
+    try {
+        const response = await fetch(url);
+        const json = await response.json();
+        //console.log(json);
+        return json;
+    } catch (error) {
+        console.log(error);
+        return null;
+    }
+};
+
 
 function customPluralize(input) {
     if(input && input != "" && input.length >= 2) {
@@ -60,29 +74,6 @@ function customPluralize(input) {
     }
 }
 
-console.log(customPluralize("casa"))
-console.log(customPluralize("aceite"))
-console.log(customPluralize("abeztruz"))
-console.log(customPluralize("lápiz"))
-console.log(customPluralize("árbol"))
-console.log(customPluralize("bisturí"))
-console.log(customPluralize("tabú"))
-console.log(customPluralize("rey"))
-console.log(customPluralize("ley"))
-console.log(customPluralize("jersey"))
-console.log(customPluralize("vals"))
-console.log(customPluralize("compás"))
-console.log(customPluralize("césped"))
-console.log(customPluralize("cáliz"))
-console.log(customPluralize("reloj"))
-console.log(customPluralize("club"))
-console.log(customPluralize("máster"))
-console.log(customPluralize("récord"))
-console.log(customPluralize("milor"))
-console.log(customPluralize("déficit"))
-
-
-
 function isSingular(input) {
     if(input && input != "") {
         if(input.endsWith("s")) return false;
@@ -90,4 +81,39 @@ function isSingular(input) {
     } else {
         return null;
     }
+}
+
+async function mycookTest() {
+    const ing = await getIngredients("https://es-mycooktouch.group-taurus.com/ingredients");
+    //console.log("Ingredients")
+    //console.log(ing)
+    const ingReduced = ing.reduce(function(valorAnterior, valorActual, indice, vector){
+        if(valorActual && valorActual != "" && valorActual.split(" ").length < 2) valorAnterior.push(valorActual);
+        return valorAnterior;
+    }, []);
+    return ingReduced;
+}
+mycookTest();
+
+function simpleTest() {
+    console.log(customPluralize("casa"))
+    console.log(customPluralize("aceite"))
+    console.log(customPluralize("abeztruz"))
+    console.log(customPluralize("lápiz"))
+    console.log(customPluralize("árbol"))
+    console.log(customPluralize("bisturí"))
+    console.log(customPluralize("tabú"))
+    console.log(customPluralize("rey"))
+    console.log(customPluralize("ley"))
+    console.log(customPluralize("jersey"))
+    console.log(customPluralize("vals"))
+    console.log(customPluralize("compás"))
+    console.log(customPluralize("césped"))
+    console.log(customPluralize("cáliz"))
+    console.log(customPluralize("reloj"))
+    console.log(customPluralize("club"))
+    console.log(customPluralize("máster"))
+    console.log(customPluralize("récord"))
+    console.log(customPluralize("milor"))
+    console.log(customPluralize("déficit"))
 }
