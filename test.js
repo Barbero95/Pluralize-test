@@ -1,18 +1,80 @@
-const fetch = require("node-fetch");
+const axios = require('axios')
+const wrURL = 'https://www.wordreference.com/definicion/'
+const cheerio = require('cheerio')
 
-const getIngredients = async url => {
-    try {
-        const response = await fetch(url);
-        const json = await response.json();
-        //console.log(json);
-        return json;
-    } catch (error) {
-        console.log(error);
-        return null;
-    }
-};
+//Extraemos la definición de una palabra
+function getDefinition(word) {
+    return new Promise((resolve, reject) => {
+        axios.get(wrURL +  encodeURI(word)).then(({ data: HTML }) => {
+            var $ = cheerio.load(HTML)
+            var result = {}
+            result.inflexiones = $('div.inflectionsSection').text()
+            resolve(result)
+        }).catch(err => {
+            console.log("Error when trying to get data online", err)
+            reject(err)
+        })
+    })
+}
+
+//Devuelve el singular y el plural de una palabra en concretos
+async function getSingularAndPlural(word) {
+    let definition = await getDefinition(word);
+    if(definition != null && definition["inflexiones"] != null) {
+        let inflexiones = definition["inflexiones"];
+        inflexiones = inflexiones.trim();
+        inflexiones = inflexiones.replace("\n", "");
+        let items = inflexiones.split("Inflexiones de");
+        
+        //first get singular
+        let singular;
+        for(let item of items) {
+            //const reg = new RegExp("\\'(?[\\s\\S]*)\\'", "gm");
+            const regex = /'(?<sing>[\s\S]*)'/gi
+            while ((result = regex.exec(item))) {
+                if(result.groups != null && result.groups.sing != null) {
+                    singular = result.groups.sing;
+                    break;
+                }
+            }
+            if (singular) break;
+        }
+        
+        //After get plural
+        let plurals = [];
+        for(let item of items) {
+            if(item.includes("pl: ")) {
+                let temp = item.match(new RegExp("(?<=pl: ).*", "gm"));
+                if(temp != null && temp.length > 0) {
+                    temp = temp[0]
+                    if(temp.includes("Del verbo")) {
+                        temp = temp.match(new RegExp(".+?(?=Del verbo)", "gm"));
+                        if(temp != null && temp.length > 0) temp = temp[0]
+                    } 
+                    plurals.push(temp);
+                }
+            }
+        }
+        return {
+            singular: singular || "-",
+            plural: plurals[0] || "-"
+        }
+    } else return null;
+}
+
+async function main() {
+    const word = "naranja";
+    console.log("Palabra a buscar: " + word);
+    const result = await getSingularAndPlural(word);
+    console.log("Resultado, singular: " + result["singular"] + ", plural: " + result["plural"]);
+}
+
+main();
 
 
+//-----------------------------------------------------------------------
+//Está función le falta el caso de la y, que existen dos causisticas.
+//RAE: https://www.rae.es/dpd/plural
 function customPluralize(input) {
     if(input && input != "" && input.length >= 2) {
         input = input.toLowerCase();
@@ -74,46 +136,72 @@ function customPluralize(input) {
     }
 }
 
-function isSingular(input) {
-    if(input && input != "") {
-        if(input.endsWith("s")) return false;
-        else return true;
-    } else {
-        return null;
+// ----------------------------------------------------------------------
+//A partir de aquí es por si queremos crear una base de datos en elastic.
+const { Client } = require('@elastic/elasticsearch')
+const client = new Client({ node: 'http://localhost:9200' })
+var crypto = require('crypto');
+
+async function entryOnElastic(word) {
+    let singular;
+    let plural;
+    if(word["singular"] != null && word["singular"] != "-") singular = word["singular"]
+    if(word["plural"] != null && word["plural"] != "-") plural = word["plural"]
+    if(singular == null && plural == null) return false;
+    //Necesitamos el hash para poder controlar los duplicados, 
+    //en elastic después de una entrada hay un segundo que si intentamos meter un objeto igual al annterior sin id, es possible que lo duplicamos.
+    //Para que no nos pase ese caso, creamos el hash y al intentar meter un segundo caso igual como el id existe no se hará la entrada.
+    const hash = crypto.createHash('md5').update(word["singular"] + word["plural"]).digest('hex');
+    try {
+        const result = await client.search({
+            index: 'pluralize',
+            body: {
+                query: {
+                    multi_match: { 
+                        query: singular != null ? singular : plural, 
+                        fields: [ "plural.keyword", "singular.keyword"] 
+                    }
+                }
+            }
+        })
+        if(result.body["hits"]["total"]["value"] == 0) {
+            const result = await client.index({
+                index: 'pluralize',
+                body: {
+                    singular: singular,
+                    plural: plural
+                },
+                id: hash
+            })
+            if(result.statusCode == 201) return true;
+        }
+        return false;
+    } catch (error) {
+        console.log(error);
+        return false;
     }
 }
 
-async function mycookTest() {
-    const ing = await getIngredients("https://es-mycooktouch.group-taurus.com/ingredients");
-    //console.log("Ingredients")
-    //console.log(ing)
-    const ingReduced = ing.reduce(function(valorAnterior, valorActual, indice, vector){
-        if(valorActual && valorActual != "" && valorActual.split(" ").length < 2) valorAnterior.push(valorActual);
-        return valorAnterior;
-    }, []);
-    return ingReduced;
+//A partir de una lista de ingredientes (ingredients), te genera el sigunlar y el plural y los indexa.
+//Es necesario disponer de un elastic, si tu url y puerto no son estos localhost:9200, debes cambiar la variable de arriba (client)
+async function main2() {
+    const ingredients = ["naranja", "tortilla", "cigüeña", "avestruz"]  //"await getIngredients()"; //Si usas una api para obtener una lista de ingredientes crea la función getIngredients
+    let word;
+    if(ingredients != null && ingredients.length > 0) {
+        console.log("Ingredientes: ", ingredients.length);
+        for(const ing of ingredients) {
+            word = ing;
+            const result = await getSingularAndPlural(word);
+            if(result != null) {
+                let state = await entryOnElastic(result);
+                if(state) console.log("Palabra añadida: ", result);
+                else console.log("Ya existe: ", result);
+            } else console.log("El singular y el plural de: " + word + " no existe.");
+        }
+    } else {
+        console.log("No hay ingredientes");
+    }
 }
-mycookTest();
 
-function simpleTest() {
-    console.log(customPluralize("casa"))
-    console.log(customPluralize("aceite"))
-    console.log(customPluralize("abeztruz"))
-    console.log(customPluralize("lápiz"))
-    console.log(customPluralize("árbol"))
-    console.log(customPluralize("bisturí"))
-    console.log(customPluralize("tabú"))
-    console.log(customPluralize("rey"))
-    console.log(customPluralize("ley"))
-    console.log(customPluralize("jersey"))
-    console.log(customPluralize("vals"))
-    console.log(customPluralize("compás"))
-    console.log(customPluralize("césped"))
-    console.log(customPluralize("cáliz"))
-    console.log(customPluralize("reloj"))
-    console.log(customPluralize("club"))
-    console.log(customPluralize("máster"))
-    console.log(customPluralize("récord"))
-    console.log(customPluralize("milor"))
-    console.log(customPluralize("déficit"))
-}
+//Descomentar para pruebas
+//main2();
